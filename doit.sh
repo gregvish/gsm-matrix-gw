@@ -1,6 +1,7 @@
 #!/bin/bash
 docker build -t gsm-matrix-gw .
 
+docker rm -f gsm-matrix-gw-container
 docker run -d \
     --name gsm-matrix-gw-container \
     --net host \

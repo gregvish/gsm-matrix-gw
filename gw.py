@@ -26,6 +26,7 @@ def parse_cmdline():
     parser.add_argument('--modem_dev', help='Modem device for QMI', required=True)
     parser.add_argument('--call_timeout', help='Timeout for ringing before hangup',
                         type=int, default=90)
+    parser.add_argument('--sim_pin', help='SIM card PIN', default=None)
     return parser.parse_args()
 
 
@@ -50,7 +51,10 @@ async def main():
         call_timeout=args.call_timeout
     )
     matrix_sms_fwd = functools.partial(MatrixSmsForwarder, matrix_client, room)
-    modem_manager = QuectelModemManager(matrix_call_fwd, matrix_sms_fwd, args.modem_tty)
+    modem_manager = QuectelModemManager(
+        matrix_call_fwd, matrix_sms_fwd, args.modem_tty,
+        sim_card_pin=args.sim_pin
+    )
 
     udp_random_port_monkeypatch(args.udp_port)
 

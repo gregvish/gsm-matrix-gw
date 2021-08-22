@@ -1,3 +1,4 @@
+import re
 import os
 import asyncio
 import logging
@@ -21,11 +22,13 @@ class AtStateError(Exception):
 
 
 class QuectelModemManager:
-    def __init__(self, call_forwarder, sms_forwarder, modem_tty, modem_baud=MODEM_BAUD):
+    def __init__(self, call_forwarder, sms_forwarder, modem_tty, modem_baud=MODEM_BAUD,
+                 sim_card_pin=None):
         self._call_fwd = call_forwarder
         self._sms_fwd = sms_forwarder
         self._modem_tty = modem_tty
         self._modem_baud = modem_baud
+        self._sim_card_pin = sim_card_pin
 
         self._last_cmd = b''
         self._response_q = asyncio.Queue()
@@ -100,6 +103,18 @@ class QuectelModemManager:
         if not result.endswith('OK'):
             raise AtCommandError(result)
 
+    async def _sim_unlock(self):
+        if not self._sim_card_pin:
+            raise AtStateError('SIM unlock needed but not PIN setup')
+
+        pin_counters = await self.do_cmd('AT+QPINC?')
+        left, total = re.match(r'.*\"SC\",(\d+),(\d+)', pin_counters).groups()
+
+        if int(total) - int(left) > 1:
+            raise AtStateError('SIM unlock attempts not perfect %s/%s' % (left, total))
+
+        self.verify_ok(await self.do_cmd('AT+CPIN=%s' % (self._sim_card_pin,)))
+
     async def _reset(self):
         self.verify_ok(await self.do_cmd('AT'))
         self.verify_ok(await self.do_cmd('AT+QURCCFG="urcport","all"'))
@@ -110,7 +125,11 @@ class QuectelModemManager:
         while True:
             urc = await asyncio.wait_for(self._urc_q.get(), timeout=AT_LONG_TIMEOUT)
             logger.info('URC -> %r' % (urc,))
-            if 'PB DONE' in urc:
+
+            if '+CPIN: SIM PIN' in urc:
+                await self._sim_unlock()
+
+            elif 'PB DONE' in urc:
                 break
 
         self.verify_ok(await self.do_cmd('AT+CMGF=1'))
