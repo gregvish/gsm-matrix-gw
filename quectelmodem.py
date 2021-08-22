@@ -25,7 +25,7 @@ class QuectelModemManager:
     def __init__(self, call_forwarder, sms_forwarder, modem_tty, modem_baud=MODEM_BAUD,
                  sim_card_pin=None):
         self._call_fwd = call_forwarder
-        self._sms_fwd = sms_forwarder
+        self._sms_forwarder = sms_forwarder
         self._modem_tty = modem_tty
         self._modem_baud = modem_baud
         self._sim_card_pin = sim_card_pin
@@ -184,22 +184,23 @@ class QuectelModemManager:
         else:
             out.append(msg_lines[0])
 
-        for line in msg_lines[1:]:
-            if line == 'OK':
-                continue
+        if len(msg_lines) > 1:
+            for line in msg_lines[1:]:
+                if line == 'OK':
+                    continue
 
-            if re.match(r'^[0-9a-fA-F]+$', line) and len(line) % 2 == 0:
-                decoded = bytes.fromhex(line).decode('utf-16-be')
-                out.append(decoded)
-                orig_hex.append(line)
+                if re.match(r'^[0-9a-fA-F]+$', line) and len(line) % 2 == 0:
+                    decoded = bytes.fromhex(line).decode('utf-16-be')
+                    out.append(decoded)
+                    orig_hex.append(line)
 
-            else:
-                out.append(line)
+                else:
+                    out.append(line)
 
         if orig_hex:
             out.append('(hex: %s)' % (' '.join(orig_hex),))
 
-        await self._sms_fwd('\n'.join(out)).send()
+        await self._sms_forwarder('\n'.join(out)).send()
 
     async def _urc_handler(self):
         while True:
