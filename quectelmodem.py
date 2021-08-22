@@ -169,8 +169,37 @@ class QuectelModemManager:
     async def _handle_sms(self):
         result = await self.do_cmd('AT+CMGL')
         self.verify_ok(result)
-        result = result.replace('\nOK', '')
-        await self._sms_fwd(result).send()
+        msg_lines = [s for s in result.split('\n') if s]
+        out = []
+        orig_hex = []
+
+        head_match = re.match(r'^\+CMGL\:\ (.*?),(.*?),(.*?),(.*?),(.*?),(.*?)$',
+                              msg_lines[0])
+        if head_match:
+            head = head_match.groups()
+            head = (s.replace('"', '') for s in head)
+            _, _, number, _, date, time = head
+            out.append('SMS from %s (at %s, %s)' % (number, date, time))
+
+        else:
+            out.append(msg_lines[0])
+
+        for line in msg_lines[1:]:
+            if line == 'OK':
+                continue
+
+            if re.match(r'^[0-9a-fA-F]+$', line) and len(line) % 2 == 0:
+                decoded = bytes.fromhex(line).decode('utf-16-be')
+                out.append(decoded)
+                orig_hex.append(line)
+
+            else:
+                out.append(line)
+
+        if orig_hex:
+            out.append('(hex: %s)' % (' '.join(orig_hex),))
+
+        await self._sms_fwd('\n'.join(out)).send()
 
     async def _urc_handler(self):
         while True:
