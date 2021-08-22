@@ -105,12 +105,12 @@ class QuectelModemManager:
 
     async def _sim_unlock(self):
         if not self._sim_card_pin:
-            raise AtStateError('SIM unlock needed but not PIN setup')
+            raise AtStateError('SIM unlock needed but no PIN setup')
 
         pin_counters = await self.do_cmd('AT+QPINC?')
         left, total = re.match(r'.*\"SC\",(\d+),(\d+)', pin_counters).groups()
 
-        if int(total) - int(left) > 1:
+        if int(total) - int(left) > 0:
             raise AtStateError('SIM unlock attempts not perfect %s/%s' % (left, total))
 
         self.verify_ok(await self.do_cmd('AT+CPIN=%s' % (self._sim_card_pin,)))
