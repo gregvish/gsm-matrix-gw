@@ -11,6 +11,7 @@ MODEM_BAUD = 115200
 AT_SHORT_TIMEOUT = 0.2
 AT_MEDIUM_TIMEOUT = 0.5
 AT_LONG_TIMEOUT = 5
+MIN_ALLOWED_UNLOCK_ATTEMPTS = 3
 
 logger = logging.getLogger('QuectelModem')
 
@@ -22,13 +23,14 @@ class AtStateError(Exception):
 
 
 class QuectelModemManager:
-    def __init__(self, call_forwarder, sms_forwarder, modem_tty, modem_baud=MODEM_BAUD,
-                 sim_card_pin=None):
-        self._call_fwd = call_forwarder
+    def __init__(self, modem_tty, modem_baud=MODEM_BAUD, call_forwarder=None,
+                 sms_forwarder=None, sim_card_pin=None, extra_initer=None):
+        self._call_forwarder = call_forwarder
         self._sms_forwarder = sms_forwarder
         self._modem_tty = modem_tty
         self._modem_baud = modem_baud
         self._sim_card_pin = sim_card_pin
+        self._extra_initer = extra_initer
 
         self._last_cmd = b''
         self._response_q = asyncio.Queue()
@@ -103,22 +105,29 @@ class QuectelModemManager:
         if not result.endswith('OK'):
             raise AtCommandError(result)
 
-    async def _sim_unlock(self):
-        if not self._sim_card_pin:
-            raise AtStateError('SIM unlock needed but no PIN setup')
-
+    async def get_unlock_attempts(self):
         pin_counters = await self.do_cmd('AT+QPINC?')
         left, total = re.match(r'.*\"SC\",(\d+),(\d+)', pin_counters).groups()
+        return int(left), int(total)
 
-        if int(total) - int(left) > 0:
-            raise AtStateError('SIM unlock attempts not perfect %s/%s' % (left, total))
-
-        self.verify_ok(await self.do_cmd('AT+CPIN=%s' % (self._sim_card_pin,)))
+    async def sim_unlock(self, pin):
+        left, total = await self.get_unlock_attempts()
+        if left < MIN_ALLOWED_UNLOCK_ATTEMPTS:
+            raise AtStateError(
+                'SIM unlock attempts below %d (%d/%d)' % (
+                    MIN_ALLOWED_UNLOCK_ATTEMPTS, left, total
+                )
+            )
+        self.verify_ok(await self.do_cmd('AT+CPIN=%s' % (pin,)))
 
     async def _reset(self):
         self.verify_ok(await self.do_cmd('AT'))
         self.verify_ok(await self.do_cmd('AT+QURCCFG="urcport","all"'))
         self.verify_ok(await self.do_cmd('ATH0'))
+
+        if self._extra_initer:
+            await self._extra_initer(self, self._urc_q).run()
+
         self.verify_ok(await self.do_cmd('AT+CFUN=0'))
         self.verify_ok(await self.do_cmd('AT+CFUN=1'))
 
@@ -127,7 +136,10 @@ class QuectelModemManager:
             logger.info('URC -> %r' % (urc,))
 
             if '+CPIN: SIM PIN' in urc:
-                await self._sim_unlock()
+                if not self._sim_card_pin:
+                    raise AtStateError('SIM unlock needed but no PIN setup')
+
+                await self.sim_unlock(self._sim_card_pin)
 
             elif 'PB DONE' in urc:
                 break
@@ -162,7 +174,7 @@ class QuectelModemManager:
             logger.info('Call connected. Sending ATA!')
             self.verify_ok(await self.do_cmd('ATA'))
 
-        self._call_fwd_task = self._call_fwd(
+        self._call_fwd_task = self._call_forwarder(
             'GSM %s' % (number,), call_connected_cb, call_ended_cb
         ).run()
 

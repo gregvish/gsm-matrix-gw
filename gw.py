@@ -52,7 +52,9 @@ async def main():
     )
     matrix_sms_fwd = functools.partial(MatrixSmsForwarder, matrix_client, room)
     modem_manager = QuectelModemManager(
-        matrix_call_fwd, matrix_sms_fwd, args.modem_tty,
+        args.modem_tty,
+        call_forwarder=matrix_call_fwd,
+        sms_forwarder=matrix_sms_fwd,
         sim_card_pin=args.sim_pin
     )
 
