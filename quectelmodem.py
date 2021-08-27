@@ -29,8 +29,8 @@ class QuectelModemManager:
         self._sms_forwarder = sms_forwarder
         self._modem_tty = modem_tty
         self._modem_baud = modem_baud
-        self._sim_card_pin = sim_card_pin
         self._extra_initer = extra_initer
+        self.sim_card_pin = sim_card_pin
 
         self._last_cmd = b''
         self._response_q = asyncio.Queue()
@@ -121,12 +121,13 @@ class QuectelModemManager:
         self.verify_ok(await self.do_cmd('AT+CPIN=%s' % (pin,)))
 
     async def _reset(self):
+        retval = True
         self.verify_ok(await self.do_cmd('AT'))
         self.verify_ok(await self.do_cmd('AT+QURCCFG="urcport","all"'))
         self.verify_ok(await self.do_cmd('ATH0'))
 
         if self._extra_initer:
-            await self._extra_initer(self, self._urc_q).run()
+            retval = await self._extra_initer(self, self._urc_q).run()
 
         self.verify_ok(await self.do_cmd('AT+CFUN=0'))
         self.verify_ok(await self.do_cmd('AT+CFUN=1'))
@@ -136,16 +137,17 @@ class QuectelModemManager:
             logger.info('URC -> %r' % (urc,))
 
             if '+CPIN: SIM PIN' in urc:
-                if not self._sim_card_pin:
+                if not self.sim_card_pin:
                     raise AtStateError('SIM unlock needed but no PIN setup')
 
-                await self.sim_unlock(self._sim_card_pin)
+                await self.sim_unlock(self.sim_card_pin)
 
             elif 'PB DONE' in urc:
                 break
 
         self.verify_ok(await self.do_cmd('AT+CMGF=1'))
         logger.info('%r' % (await self.do_cmd('AT+COPS?'),))
+        return retval
 
     async def _handle_call(self):
         result = await self.do_cmd('AT+CLCC')
@@ -244,8 +246,9 @@ class QuectelModemManager:
         rx_task = asyncio.create_task(self._tty_rx_handler())
 
         logger.info('Got AT shell to modem. Resetting')
-        await self._reset()
-        urc_task = asyncio.create_task(self._urc_handler())
+        if not await self._reset():
+            return
 
+        urc_task = asyncio.create_task(self._urc_handler())
         await asyncio.gather(rx_task, urc_task)
 
