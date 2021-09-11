@@ -7,6 +7,8 @@ import contextlib
 CID_PATTERN = re.compile(rb'.*\sCID\:\s\'(\d+)\'.*', re.MULTILINE | re.DOTALL)
 logger = logging.getLogger('QmiVoice')
 
+CID_RELEASE_RANGE = range(2, 4)
+
 
 class QmiVoiceException(Exception):
     pass
@@ -19,8 +21,17 @@ class QmiVoice:
     def __init__(self, device):
         self._device = device
 
+    def _release_cid(self, cid):
+        proc = subprocess.run(
+            ['qmicli', '-d', self._device, '--client-cid', str(cid), '--voice-noop']
+        )
+
     @contextlib.contextmanager
     def alloc_cid(self):
+        # HACK: Release a few voice CIDs in case they were somehow allocated prior...
+        for cid in CID_RELEASE_RANGE:
+            self._release_cid(cid)
+
         proc = subprocess.run(
             ['qmicli', '-d', self._device, '--client-no-release-cid', '--voice-noop'],
             check=True, capture_output=True
@@ -35,8 +46,6 @@ class QmiVoice:
         try:
             yield
         finally:
-            proc = subprocess.run(
-                ['qmicli', '-d', self._device, '--client-cid', cid, '--voice-noop'],
-                check=True
-            )
+            self._release_cid(cid)
             logger.info('QMI released voice CID: %s' % (cid,))
+

@@ -23,6 +23,10 @@ ALSA_DEVICE = 'GsmModemCard'
 logger = logging.getLogger('MatrixApi')
 
 
+class MatrixLoginError(Exception):
+    pass
+
+
 async def do_matrix_login(homeserver, user, password):
     if not os.path.exists(STORE_DIR):
         os.makedirs(STORE_DIR)
@@ -34,11 +38,18 @@ async def do_matrix_login(homeserver, user, password):
     if not os.path.exists(CREDS_FILE):
         client = AsyncClient(homeserver=homeserver, user=user,
                              store_path=STORE_DIR, config=client_config)
-        res = await client.login(password)
+        res = await client.login_raw({
+            'type': 'm.login.password',
+            'identifier': {
+                'type': 'm.id.user',
+                'user': user,
+            },
+            'password': password
+        })
 
         if not (isinstance(res, LoginResponse)):
             logger.error('Login fail.')
-            return
+            raise MatrixLoginError(res)
 
         with open(CREDS_FILE, "w") as creds:
             json.dump({
@@ -80,7 +91,7 @@ class MatrixEventHandler:
         self._client.add_event_callback(self._bad_event_cb, BadEvent)
 
     async def _text_msg_cb(self, room, event):
-        print('>>> Text: [%s]:(%s) %s' % (
+        logger.debug('>>> Text: [%s]:(%s) %s' % (
             room.display_name, room.user_name(event.sender), event.body
         ))
 

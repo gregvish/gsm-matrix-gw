@@ -23,6 +23,7 @@ RUN pip install pyserial-asyncio==0.5
 
 RUN useradd -ms /bin/bash user
 RUN addgroup user dialout
+RUN addgroup user audio
 
 USER user
 WORKDIR /home/user/

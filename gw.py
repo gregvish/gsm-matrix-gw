@@ -63,7 +63,7 @@ async def main():
     with qmivoice.QmiVoice(args.modem_dev).alloc_cid():
         await asyncio.gather(
             modem_manager.run(),
-            matrix_client.sync_forever(full_state=True)
+            matrix_client.sync_forever(loop_sleep_time=500, full_state=True)
         )
 
 
