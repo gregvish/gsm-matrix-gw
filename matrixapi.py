@@ -1,4 +1,5 @@
 import os
+import re
 import json
 import random
 import aiohttp
@@ -166,19 +167,26 @@ class MatrixCallForwarder:
             await self._matrix_client.set_displayname(self._default_displayname)
 
     def _patch_sdp(self, sdp, external_ip, udp_port):
-        new_sdp = bytearray(sdp.encode())
-
-        # Try to find an ICE candidate in the SDP, so that we can add one before it
-        idx = new_sdp.lower().find(b'a=candidate:')
-        if idx < 0:
+        new_sdp = sdp.encode()
+        match = re.search(
+            rb'^a=candidate:[^ ]+ [0-9]+ [^ ]+ ([0-9]+) [^ ]+ [0-9]+ typ host\s?$',
+            new_sdp, flags=re.MULTILINE
+        )
+        if not match:
             return sdp
-        # Find the strange magic number after the 'udp' delimiter in the ICE candidate
-        proto = ' udp '
-        magic = sdp[sdp.lower().find(proto) + len(proto): ].split(' ')[0]
+        magic, = match.groups()
 
-        new_sdp[idx: idx] = ('a=candidate:%s 1 udp %s %s %d typ host\n' % (
-            os.urandom(16).hex(), magic, external_ip, udp_port
-        )).encode()
+        # Remove all existing candidates
+        new_sdp = bytearray(
+            re.sub(rb'a=candidate:.* typ host', b'', new_sdp, flags=re.DOTALL)
+        )
+
+        # Add only external IP and forwarded udp_port
+        new_sdp[match.start(): match.start()] = (
+            'a=candidate:%s 1 udp %s %s %d typ host' % (
+                os.urandom(16).hex(), magic.decode(), external_ip, udp_port
+            )
+        ).encode()
 
         logger.info('Patched SDP, added ICE candidate')
         return new_sdp.decode()
