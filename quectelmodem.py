@@ -215,6 +215,7 @@ class QuectelModemManager:
             out.append('(hex: %s)' % (' '.join(orig_hex),))
 
         await self._sms_forwarder('\n'.join(out)).send()
+        self.verify_ok(await self.do_cmd('AT+CMGD=1,1'))
 
     async def _urc_handler(self):
         while True:
