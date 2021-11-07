@@ -139,10 +139,19 @@ class QuectelModemManager:
         self.verify_ok(await self.do_cmd('AT+CPIN=%s' % (pin,)))
 
     async def _measure_csq(self):
-        csq = await self.do_cmd('AT+CSQ')
+        for i in range(10):
+            try:
+                csq = await self.do_cmd('AT+CSQ')
+                break
+            except asyncio.exceptions.TimeoutError:
+                pass
+        else:
+            raise AtStateError('CSQ timeout after many attempts')
+
         m = re.match(r'^\+CSQ\:\ (\d+),(\d+)', csq)
         if not m:
             return
+
         signal, unk = m.groups()
         signal, unk = int(signal), int(unk)
         if signal != self._cur_csq:
@@ -156,7 +165,6 @@ class QuectelModemManager:
             await asyncio.sleep(COPS_SLEEP)
 
             cops = await self.do_cmd('AT+COPS?')
-            await self._measure_csq()
             m = re.match(r'^\+COPS\:\ (\d+),(\d+),(.*?),(\d+)', cops)
 
             if not m:
@@ -164,6 +172,8 @@ class QuectelModemManager:
                 if not m:
                     logger.warning('AT+COPS bad output: %r' % (cops, ))
                     continue
+
+                await self._measure_csq()
                 status, = m.groups()
                 if int(status) == STATUS_REJECTED:
                     logger.warning('AT+COPS got rejected status')
@@ -175,6 +185,7 @@ class QuectelModemManager:
             logger.info('Network: %s (%s), status: %s' % (
                 operator, NET_TYPES[net_type], status)
             )
+            await self._measure_csq()
             if NET_TYPES[net_type] == self._preferred_network:
                 connected = True
                 break
@@ -244,6 +255,7 @@ class QuectelModemManager:
             if await self._wait_for_network():
                 logger.info('Finally! Connected.')
                 connected = True
+                break
 
         if not connected:
             raise NetworkError('Failed connecting to all networks')
