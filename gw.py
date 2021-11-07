@@ -27,6 +27,7 @@ def parse_cmdline():
     parser.add_argument('--call_timeout', help='Timeout for ringing before hangup',
                         type=int, default=90)
     parser.add_argument('--sim_pin', help='SIM card PIN', default=None)
+    parser.add_argument('--preferred_network', help='GSM/UMTS/LTE', default='LTE')
     return parser.parse_args()
 
 
@@ -55,7 +56,8 @@ async def main():
         args.modem_tty,
         call_forwarder=matrix_call_fwd,
         sms_forwarder=matrix_sms_fwd,
-        sim_card_pin=args.sim_pin
+        sim_card_pin=args.sim_pin,
+        preferred_network=args.preferred_network
     )
 
     udp_random_port_monkeypatch(args.udp_port)

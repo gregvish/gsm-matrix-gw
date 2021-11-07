@@ -12,6 +12,17 @@ AT_SHORT_TIMEOUT = 0.2
 AT_MEDIUM_TIMEOUT = 0.5
 AT_LONG_TIMEOUT = 5
 MIN_ALLOWED_UNLOCK_ATTEMPTS = 3
+NETWORK_COPS_ATTEMPTS = 10
+COPS_SLEEP = 2
+COPS_PASSIVE_SCAN_TIMEOUT = 4 * 60
+MANUAL_COPS_WAIT_SECONDS = 10
+
+NET_TYPES = {
+    0: 'GSM',
+    2: 'UMTS',
+    7: 'LTE',
+}
+STATUS_REJECTED = 2
 
 logger = logging.getLogger('QuectelModem')
 
@@ -20,16 +31,20 @@ class AtCommandError(Exception):
     pass
 class AtStateError(Exception):
     pass
+class NetworkError(Exception):
+    pass
 
 
 class QuectelModemManager:
     def __init__(self, modem_tty, modem_baud=MODEM_BAUD, call_forwarder=None,
-                 sms_forwarder=None, sim_card_pin=None, extra_initer=None):
+                 sms_forwarder=None, sim_card_pin=None, preferred_network='LTE',
+                 extra_initer=None):
         self._call_forwarder = call_forwarder
         self._sms_forwarder = sms_forwarder
         self._modem_tty = modem_tty
         self._modem_baud = modem_baud
         self._extra_initer = extra_initer
+        self._preferred_network = preferred_network
         self.sim_card_pin = sim_card_pin
 
         self._last_cmd = b''
@@ -37,6 +52,7 @@ class QuectelModemManager:
         self._urc_q = asyncio.Queue()
         self._in_call = False
         self._call_fwd_task = None
+        self._cur_csq = 0
 
     async def _reset_at(self):
         self._modem_w.write(b'\rATE\r')
@@ -94,9 +110,11 @@ class QuectelModemManager:
             await self._response_q.put((b'\n'.join(lines)).decode())
 
 
-    async def do_cmd(self, cmd, timeout=AT_LONG_TIMEOUT):
+    async def do_cmd(self, cmd, timeout=AT_LONG_TIMEOUT, dont_wait=False):
         self._last_cmd = cmd.encode()
         self._modem_w.write(b'%s\r' % (self._last_cmd,))
+        if dont_wait:
+            return None
         result = await asyncio.wait_for(self._response_q.get(), timeout=timeout)
         logger.debug('%s -> %r' % (cmd, result))
         return result
@@ -119,6 +137,116 @@ class QuectelModemManager:
                 )
             )
         self.verify_ok(await self.do_cmd('AT+CPIN=%s' % (pin,)))
+
+    async def _measure_csq(self):
+        csq = await self.do_cmd('AT+CSQ')
+        m = re.match(r'^\+CSQ\:\ (\d+),(\d+)', csq)
+        if not m:
+            return
+        signal, unk = m.groups()
+        signal, unk = int(signal), int(unk)
+        if signal != self._cur_csq:
+            logger.info('CSQ changed! %d -> %d (%d)' % (self._cur_csq, signal, unk))
+            self._cur_csq = signal
+
+    async def _wait_for_network(self):
+        connected = False
+
+        for i in range(NETWORK_COPS_ATTEMPTS):
+            await asyncio.sleep(COPS_SLEEP)
+
+            cops = await self.do_cmd('AT+COPS?')
+            await self._measure_csq()
+            m = re.match(r'^\+COPS\:\ (\d+),(\d+),(.*?),(\d+)', cops)
+
+            if not m:
+                m = re.match(r'^\+COPS\:\ (\d+)', cops)
+                if not m:
+                    logger.warning('AT+COPS bad output: %r' % (cops, ))
+                    continue
+                status, = m.groups()
+                if int(status) == STATUS_REJECTED:
+                    logger.warning('AT+COPS got rejected status')
+                    break
+                continue
+
+            status, _, operator, net_type = m.groups()
+            status, net_type = int(status), int(net_type)
+            logger.info('Network: %s (%s), status: %s' % (
+                operator, NET_TYPES[net_type], status)
+            )
+            if NET_TYPES[net_type] == self._preferred_network:
+                connected = True
+                break
+
+        return connected
+
+    async def _network_selection(self):
+        logger.info('Waiting for network...')
+        await self.do_cmd('AT+COPS=0')
+
+        if await self._wait_for_network():
+            logger.info('Auto-connected!')
+            return
+
+        logger.warning('Passive scanning available networks...')
+
+        all_cops = await self.do_cmd('AT+COPS=?', timeout=COPS_PASSIVE_SCAN_TIMEOUT)
+        m = re.match(r'^\+COPS\: \((.*)\)\,\,', all_cops)
+        if not m:
+            raise NetworkError('Bad network list: %r' % (all_cops, ))
+        nets = m.groups()[0].split('),(')
+        if not nets:
+            raise NetworkError('Empty network list: %r' % (all_cops, ))
+
+        logger.info('Available networks:')
+        net_dict = {t: [] for t in NET_TYPES.keys()}
+
+        for net in nets:
+            status, long_name, short_name, number, net_type = net.split(',')
+            status, net_type = int(status), int(net_type)
+            logger.info('    %s (%s) (%s) type: %s' % (
+                long_name, short_name, number, NET_TYPES[net_type]
+            ))
+            net_dict[net_type].append((long_name, short_name, number))
+
+        connected = False
+        preferred = {v: k for k, v in NET_TYPES.items()}[self._preferred_network]
+        net_types_to_try = list(sorted(NET_TYPES.keys(), reverse=True))
+        net_types_to_try.remove(preferred)
+        net_types_to_try.insert(0, preferred)
+
+        while True:
+            if not net_types_to_try:
+                break
+
+            cur_type = net_types_to_try[0]
+            if not net_dict[cur_type]:
+                net_types_to_try.remove(cur_type)
+                continue
+
+            long_name, _, _ = net_dict[cur_type].pop(0)
+            logger.info('Trying %s (%s)' % (long_name, NET_TYPES[cur_type]))
+
+            await self.do_cmd('AT+COPS=1,0,%s,%d' % (long_name, cur_type),
+                              dont_wait=True)
+            await asyncio.sleep(1)
+
+            for i in range(MANUAL_COPS_WAIT_SECONDS):
+                try:
+                    await self.do_cmd('AT', timeout=1)
+                    break
+                except asyncio.exceptions.TimeoutError:
+                    pass
+            else:
+                raise AtStateError('Timeout after COPS selection')
+
+            if await self._wait_for_network():
+                logger.info('Finally! Connected.')
+                connected = True
+
+        if not connected:
+            raise NetworkError('Failed connecting to all networks')
 
     async def _reset(self):
         retval = True
@@ -146,7 +274,8 @@ class QuectelModemManager:
                 break
 
         self.verify_ok(await self.do_cmd('AT+CMGF=1'))
-        logger.info('%r' % (await self.do_cmd('AT+COPS?'),))
+
+        await self._network_selection()
         return retval
 
     async def _handle_call(self):
