@@ -26,7 +26,7 @@ class QmiVoice:
 
     @contextlib.contextmanager
     def alloc_cid(self):
-        # HACK: First CID to be allocated should be this one
+        # HACK: Allocate this CID first, so that set_current_host_app runs on openqti
         subprocess.run(['qmicli', '-d', self._device, '--dms-noop'])
 
         proc = subprocess.run(

@@ -281,6 +281,7 @@ class QuectelModemManager:
 
         await self._cfun_restart()
         self.verify_ok(await self.do_cmd('AT+CMGF=1'))
+        self.verify_ok(await self.do_cmd('AT+CPMS="ME","ME","ME"'))
 
         await self._network_selection()
         return retval

@@ -15,11 +15,11 @@ RUN apt-get update && DEBIAN_FRONTEND="noninteractive" apt-get install -y \
     libqmi-utils \
     libolm-dev
 
-RUN pip install --upgrade pip
-RUN pip install av==8.0.3 --no-binary av
-RUN pip install aiortc==1.2.1
-RUN pip install "matrix-nio[e2e]"==0.18.6
-RUN pip install pyserial-asyncio==0.5
+RUN pip install pip==22.0.4
+RUN pip install av==9.1.1 --no-binary av
+RUN pip install aiortc==1.3.1
+RUN pip install "matrix-nio[e2e]"==0.19.0
+RUN pip install pyserial-asyncio==0.6
 
 RUN useradd -ms /bin/bash user
 RUN addgroup user dialout
