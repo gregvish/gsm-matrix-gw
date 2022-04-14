@@ -22,6 +22,11 @@ NET_TYPES = {
     2: 'UMTS',
     7: 'LTE',
 }
+SCANMODE_FOR_NET_TYPE = {
+    'GSM': 1,
+    'UMTS': 2,
+    'LTE': 3,
+}
 STATUS_REJECTED = 2
 
 logger = logging.getLogger('QuectelModem')
@@ -185,8 +190,6 @@ class QuectelModemManager:
 
     async def _network_selection(self):
         logger.info('Waiting for network...')
-        await self.do_cmd('AT+COPS=0')
-
         if await self._wait_for_network():
             logger.info('Auto-connected!')
             return
@@ -272,6 +275,9 @@ class QuectelModemManager:
 
         if self._extra_initer:
             retval = await self._extra_initer(self, self._urc_q).run()
+
+        scanmode = SCANMODE_FOR_NET_TYPE[self._preferred_network]
+        self.verify_ok(await self.do_cmd('AT+QCFG="nwscanmode",%d' % (scanmode, )))
 
         await self._cfun_restart()
         self.verify_ok(await self.do_cmd('AT+CMGF=1'))
